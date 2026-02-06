@@ -42,6 +42,7 @@ interface ImmersiveWorldProps {
     entities: EntityData[];
     onEntityClick: (entityId: string) => void;
     onBack?: () => void;
+    onEnterBoard?: () => void;
     isLoading?: boolean;
     fallbackGradient?: string;
 }
@@ -95,27 +96,269 @@ const PanoramicSkybox: React.FC<{ imageUrl: string }> = ({ imageUrl }) => {
     return null;
 };
 
-// Gradient background fallback
+// Gradient background fallback — creates a real gradient skybox texture
 const GradientBackground: React.FC<{ theme: ThemeId }> = ({ theme }) => {
     const { scene } = useThree();
 
     useEffect(() => {
-        const colors: Record<ThemeId, [string, string]> = {
-            [ThemeId.LOBBY]: ['#1a2744', '#050810'],
-            [ThemeId.GARDEN]: ['#e8e8df', '#c8c8c0'],
-            [ThemeId.JUKE_JOINT]: ['#1a0a1f', '#000000'],
-            [ThemeId.EDITORIAL]: ['#ffffff', '#e0e0e0']
+        // Rich gradient palettes per theme (top, middle, bottom)
+        const palettes: Record<ThemeId, [string, string, string]> = {
+            [ThemeId.LOBBY]: ['#050810', '#0F172A', '#1a2744'],
+            [ThemeId.GARDEN]: ['#87CEAB', '#C8D8B0', '#E8E8DF'],
+            [ThemeId.JUKE_JOINT]: ['#000000', '#0D0015', '#1a0a2f'],
+            [ThemeId.EDITORIAL]: ['#E8E8E8', '#F4F4F4', '#FFFFFF']
         };
 
-        const [top, bottom] = colors[theme];
-        scene.background = new THREE.Color(bottom);
+        const [topColor, midColor, bottomColor] = palettes[theme];
+
+        // Create a vertical gradient texture using canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = 2;
+        canvas.height = 512;
+        const ctx = canvas.getContext('2d')!;
+        const gradient = ctx.createLinearGradient(0, 0, 0, 512);
+        gradient.addColorStop(0, topColor);
+        gradient.addColorStop(0.4, midColor);
+        gradient.addColorStop(1, bottomColor);
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 2, 512);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.mapping = THREE.EquirectangularReflectionMapping;
+        scene.background = texture;
 
         return () => {
+            texture.dispose();
             scene.background = null;
         };
     }, [theme, scene]);
 
     return null;
+};
+
+// ============================================================
+// Disney Multiplane Camera Effect (1950s-60s style)
+// Layered planes at different depths create parallax as camera moves.
+// Each theme gets a unique set of atmospheric layers.
+// ============================================================
+
+interface MultiplaneLayer {
+    depth: number;       // Distance from camera (further = slower parallax)
+    opacity: number;
+    color: string;
+    pattern: 'clouds' | 'mist' | 'columns' | 'stars' | 'foliage' | 'grid' | 'neon';
+    scale: number;
+    yOffset: number;
+}
+
+const MULTIPLANE_LAYERS: Record<ThemeId, MultiplaneLayer[]> = {
+    [ThemeId.LOBBY]: [
+        // Far background: starfield / ceiling
+        { depth: -25, opacity: 0.15, color: '#D4AF37', pattern: 'stars', scale: 40, yOffset: 8 },
+        // Mid: art deco columns silhouettes
+        { depth: -18, opacity: 0.08, color: '#D4AF37', pattern: 'columns', scale: 20, yOffset: 0 },
+        // Near foreground: warm mist
+        { depth: -10, opacity: 0.06, color: '#1a2744', pattern: 'mist', scale: 15, yOffset: -2 },
+    ],
+    [ThemeId.GARDEN]: [
+        // Far: sky wash
+        { depth: -25, opacity: 0.12, color: '#4A5D23', pattern: 'clouds', scale: 40, yOffset: 8 },
+        // Mid: bamboo / foliage silhouettes
+        { depth: -16, opacity: 0.1, color: '#2D3B11', pattern: 'foliage', scale: 25, yOffset: -1 },
+        // Near: mist off pond
+        { depth: -8, opacity: 0.08, color: '#A3B18A', pattern: 'mist', scale: 12, yOffset: -3 },
+    ],
+    [ThemeId.JUKE_JOINT]: [
+        // Far: neon glow wash
+        { depth: -25, opacity: 0.2, color: '#D946EF', pattern: 'neon', scale: 35, yOffset: 5 },
+        // Mid: smoke / haze
+        { depth: -15, opacity: 0.12, color: '#22D3EE', pattern: 'mist', scale: 20, yOffset: 0 },
+        // Near: neon reflections
+        { depth: -8, opacity: 0.08, color: '#D946EF', pattern: 'neon', scale: 10, yOffset: -3 },
+    ],
+    [ThemeId.EDITORIAL]: [
+        // Far: minimal grid
+        { depth: -25, opacity: 0.06, color: '#FF3333', pattern: 'grid', scale: 40, yOffset: 5 },
+        // Mid: subtle structure
+        { depth: -16, opacity: 0.04, color: '#000000', pattern: 'columns', scale: 25, yOffset: 0 },
+        // Near: light wash
+        { depth: -8, opacity: 0.03, color: '#FF3333', pattern: 'mist', scale: 15, yOffset: -2 },
+    ],
+};
+
+// Generates a canvas texture for a multiplane layer pattern
+function generateLayerTexture(pattern: MultiplaneLayer['pattern'], color: string, size: number = 512): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+
+    ctx.clearRect(0, 0, size, size);
+
+    switch (pattern) {
+        case 'stars': {
+            for (let i = 0; i < 120; i++) {
+                const x = Math.random() * size;
+                const y = Math.random() * size;
+                const r = Math.random() * 2 + 0.5;
+                ctx.beginPath();
+                ctx.arc(x, y, r, 0, Math.PI * 2);
+                ctx.fillStyle = color;
+                ctx.globalAlpha = Math.random() * 0.8 + 0.2;
+                ctx.fill();
+            }
+            break;
+        }
+        case 'clouds':
+        case 'mist': {
+            // Soft radial blobs
+            for (let i = 0; i < 8; i++) {
+                const x = Math.random() * size;
+                const y = Math.random() * size;
+                const r = Math.random() * size * 0.3 + size * 0.1;
+                const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+                grad.addColorStop(0, color);
+                grad.addColorStop(1, 'transparent');
+                ctx.fillStyle = grad;
+                ctx.globalAlpha = pattern === 'clouds' ? 0.4 : 0.25;
+                ctx.fillRect(0, 0, size, size);
+            }
+            break;
+        }
+        case 'columns': {
+            // Vertical pillars / silhouettes
+            ctx.fillStyle = color;
+            ctx.globalAlpha = 0.6;
+            const numCols = 6;
+            const colWidth = size / (numCols * 4);
+            for (let i = 0; i < numCols; i++) {
+                const x = (i / numCols) * size + size / (numCols * 2);
+                const h = size * (0.5 + Math.random() * 0.4);
+                const y = size - h;
+                ctx.fillRect(x - colWidth / 2, y, colWidth, h);
+                // Decorative top
+                ctx.beginPath();
+                ctx.arc(x, y, colWidth * 0.8, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            break;
+        }
+        case 'foliage': {
+            // Organic shapes — leaves / branches
+            ctx.fillStyle = color;
+            ctx.globalAlpha = 0.5;
+            for (let i = 0; i < 20; i++) {
+                const x = Math.random() * size;
+                const y = size * 0.3 + Math.random() * size * 0.7;
+                ctx.beginPath();
+                ctx.ellipse(x, y, Math.random() * 30 + 10, Math.random() * 60 + 20, Math.random() * Math.PI, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            break;
+        }
+        case 'neon': {
+            // Glowing horizontal / diagonal lines
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.globalAlpha = 0.7;
+            ctx.shadowColor = color;
+            ctx.shadowBlur = 20;
+            for (let i = 0; i < 6; i++) {
+                const y = Math.random() * size;
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(size, y + (Math.random() - 0.5) * 100);
+                ctx.stroke();
+            }
+            // Vertical neon bars
+            for (let i = 0; i < 3; i++) {
+                const x = Math.random() * size;
+                const h = Math.random() * size * 0.4 + size * 0.1;
+                const y = Math.random() * (size - h);
+                ctx.beginPath();
+                ctx.moveTo(x, y);
+                ctx.lineTo(x, y + h);
+                ctx.stroke();
+            }
+            break;
+        }
+        case 'grid': {
+            // Clean editorial grid
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            ctx.globalAlpha = 0.3;
+            const spacing = size / 12;
+            for (let i = 0; i <= 12; i++) {
+                ctx.beginPath();
+                ctx.moveTo(i * spacing, 0);
+                ctx.lineTo(i * spacing, size);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(0, i * spacing);
+                ctx.lineTo(size, i * spacing);
+                ctx.stroke();
+            }
+            break;
+        }
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    return texture;
+}
+
+// Single multiplane layer — a large transparent plane that drifts subtly
+const MultiplaneLayerMesh: React.FC<{
+    layer: MultiplaneLayer;
+    index: number;
+}> = ({ layer, index }) => {
+    const meshRef = useRef<THREE.Mesh>(null);
+    const texture = React.useMemo(
+        () => generateLayerTexture(layer.pattern, layer.color),
+        [layer.pattern, layer.color]
+    );
+
+    useFrame((state) => {
+        if (meshRef.current) {
+            const t = state.clock.getElapsedTime();
+            // Gentle sway — each layer moves differently for parallax
+            const swaySpeed = 0.1 / (index + 1);
+            const swayAmount = 0.3 * (index + 1);
+            meshRef.current.position.x = Math.sin(t * swaySpeed) * swayAmount;
+            meshRef.current.position.y = layer.yOffset + Math.sin(t * swaySpeed * 0.7 + index) * 0.15;
+        }
+    });
+
+    return (
+        <mesh
+            ref={meshRef}
+            position={[0, layer.yOffset, layer.depth]}
+            rotation={[0, 0, 0]}
+        >
+            <planeGeometry args={[layer.scale, layer.scale * 0.6]} />
+            <meshBasicMaterial
+                map={texture}
+                transparent
+                opacity={layer.opacity}
+                side={THREE.DoubleSide}
+                depthWrite={false}
+            />
+        </mesh>
+    );
+};
+
+// The complete multiplane camera rig
+const MultiplaneCamera: React.FC<{ theme: ThemeId }> = ({ theme }) => {
+    const layers = MULTIPLANE_LAYERS[theme];
+
+    return (
+        <group>
+            {layers.map((layer, i) => (
+                <MultiplaneLayerMesh key={i} layer={layer} index={i} />
+            ))}
+        </group>
+    );
 };
 
 // Floating entity orb
@@ -280,54 +523,165 @@ const EntityOrb: React.FC<{
     );
 };
 
-// Loading spinner overlay
-const LoadingOverlay: React.FC<{ theme: ThemeId }> = ({ theme }) => {
-    const colors = THEME_COLORS[theme];
+// Atmospheric particles that float in the 3D space
+const AtmosphericParticles: React.FC<{ colors: typeof THEME_COLORS[ThemeId]; count?: number }> = ({ colors, count = 80 }) => {
+    const pointsRef = useRef<THREE.Points>(null);
+    const geoRef = useRef<THREE.BufferGeometry>(null);
+
+    useEffect(() => {
+        if (!geoRef.current) return;
+        const positions = new Float32Array(count * 3);
+        for (let i = 0; i < count; i++) {
+            positions[i * 3] = (Math.random() - 0.5) * 30;
+            positions[i * 3 + 1] = Math.random() * 15 - 2;
+            positions[i * 3 + 2] = (Math.random() - 0.5) * 30;
+        }
+        geoRef.current.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    }, [count]);
+
+    useFrame((state) => {
+        if (pointsRef.current && geoRef.current) {
+            const t = state.clock.getElapsedTime() * 0.05;
+            pointsRef.current.rotation.y = t;
+            const pos = geoRef.current.attributes.position as THREE.BufferAttribute;
+            if (pos) {
+                for (let i = 0; i < count; i++) {
+                    const y = pos.getY(i);
+                    pos.setY(i, y + Math.sin(state.clock.getElapsedTime() * 0.3 + i) * 0.002);
+                }
+                pos.needsUpdate = true;
+            }
+        }
+    });
 
     return (
-        <div
-            style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                background: 'rgba(0, 0, 0, 0.8)',
-                zIndex: 100,
-            }}
-        >
-            <div
-                style={{
-                    width: '60px',
-                    height: '60px',
-                    border: `3px solid ${colors.primary}30`,
-                    borderTop: `3px solid ${colors.primary}`,
-                    borderRadius: '50%',
-                    animation: 'spin 1s linear infinite',
-                }}
+        <points ref={pointsRef}>
+            <bufferGeometry ref={geoRef} />
+            <pointsMaterial
+                color={colors.glow}
+                size={0.06}
+                transparent
+                opacity={0.6}
+                sizeAttenuation
             />
-            <div
-                style={{
-                    marginTop: '24px',
-                    color: colors.primary,
-                    fontSize: '12px',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.2em',
-                    fontFamily: 'system-ui, sans-serif',
-                }}
-            >
-                Generating Environment...
-            </div>
-            <style>{`
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
+        </points>
+    );
+};
+
+// Ground plane with subtle grid
+const GroundPlane: React.FC<{ colors: typeof THEME_COLORS[ThemeId] }> = ({ colors }) => {
+    return (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -2, 0]} receiveShadow>
+            <planeGeometry args={[50, 50]} />
+            <meshStandardMaterial
+                color={colors.primary}
+                transparent
+                opacity={0.05}
+                metalness={0.8}
+                roughness={0.4}
+            />
+        </mesh>
+    );
+};
+
+// Fog setup component (outside Suspense, theme-aware)
+const FogSetup: React.FC<{ theme: ThemeId }> = ({ theme }) => {
+    const { scene } = useThree();
+    useEffect(() => {
+        const fogColors: Record<ThemeId, string> = {
+            [ThemeId.LOBBY]: '#0F172A',
+            [ThemeId.GARDEN]: '#E8E8DF',
+            [ThemeId.JUKE_JOINT]: '#050005',
+            [ThemeId.EDITORIAL]: '#F4F4F4',
+        };
+        scene.fog = new THREE.Fog(fogColors[theme], 20, 40);
+        return () => { scene.fog = null; };
+    }, [theme, scene]);
+    return null;
+};
+
+// Canvas Error Boundary
+class CanvasErrorBoundary extends React.Component<
+    { children: React.ReactNode; theme: ThemeId },
+    { hasError: boolean }
+> {
+    constructor(props: any) {
+        super(props);
+        this.state = { hasError: false };
+    }
+    static getDerivedStateFromError() {
+        return { hasError: true };
+    }
+    componentDidCatch(error: any, info: any) {
+        console.error('Canvas Error:', error, info);
+    }
+    render() {
+        if (this.state.hasError) {
+            const colors = THEME_COLORS[this.props.theme];
+            return (
+                <div style={{
+                    position: 'absolute', inset: 0,
+                    background: `linear-gradient(180deg, #050810, #0F172A, #1a2744)`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexDirection: 'column', gap: '16px',
+                }}>
+                    <div style={{ color: colors.primary, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.2em', opacity: 0.6 }}>
+                        3D environment unavailable
+                    </div>
+                    <div style={{ color: colors.primary, fontSize: '10px', opacity: 0.4 }}>
+                        WebGL may not be supported
+                    </div>
+                </div>
+            );
         }
-      `}</style>
+        return this.props.children;
+    }
+}
+
+// Subtle non-blocking loading pill indicator
+const LoadingPill: React.FC<{ theme: ThemeId; visible: boolean }> = ({ theme, visible }) => {
+    const colors = THEME_COLORS[theme];
+    if (!visible) return null;
+
+    return (
+        <div style={{
+            position: 'absolute',
+            top: '24px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 50,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            background: 'rgba(0, 0, 0, 0.6)',
+            backdropFilter: 'blur(10px)',
+            padding: '8px 20px',
+            borderRadius: '100px',
+            border: `1px solid ${colors.primary}30`,
+        }}>
+            <div style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor: colors.primary,
+                animation: 'pulse-dot 1.5s ease-in-out infinite',
+            }} />
+            <span style={{
+                color: colors.primary,
+                fontSize: '10px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.2em',
+                fontFamily: 'system-ui, sans-serif',
+                opacity: 0.8,
+            }}>
+                Generating skybox
+            </span>
+            <style>{`
+                @keyframes pulse-dot {
+                    0%, 100% { opacity: 0.4; transform: scale(0.8); }
+                    50% { opacity: 1; transform: scale(1.2); }
+                }
+            `}</style>
         </div>
     );
 };
@@ -339,54 +693,67 @@ export const ImmersiveWorld: React.FC<ImmersiveWorldProps> = ({
     entities,
     onEntityClick,
     onBack,
+    onEnterBoard,
     isLoading = false,
 }) => {
     const colors = THEME_COLORS[theme];
 
     return (
         <div style={{ position: 'fixed', inset: 0, background: '#000' }}>
-            {/* Three.js Canvas */}
-            <Canvas
-                camera={{ position: [0, 1.5, 0.1], fov: 75, near: 0.1, far: 1000 }}
-                style={{ position: 'absolute', inset: 0 }}
-            >
-                <Suspense fallback={null}>
-                    {/* Background */}
-                    {skyboxUrl ? (
-                        <PanoramicSkybox imageUrl={skyboxUrl} />
-                    ) : (
-                        <GradientBackground theme={theme} />
-                    )}
+            {/* Three.js Canvas with Error Boundary */}
+            <CanvasErrorBoundary theme={theme}>
+                <Canvas
+                    camera={{ position: [0, 1.5, 0.1], fov: 75, near: 0.1, far: 1000 }}
+                    style={{ position: 'absolute', inset: 0 }}
+                >
+                    {/* Fog setup - OUTSIDE Suspense, theme-aware */}
+                    <FogSetup theme={theme} />
 
-                    {/* Lighting */}
-                    <ambientLight intensity={0.5} />
-                    <pointLight position={[10, 10, 10]} intensity={0.8} color={colors.glow} />
-                    <pointLight position={[-10, -5, -10]} intensity={0.4} color={colors.primary} />
+                    <Suspense fallback={null}>
+                        {/* Background */}
+                        {skyboxUrl ? (
+                            <PanoramicSkybox imageUrl={skyboxUrl} />
+                        ) : (
+                            <GradientBackground theme={theme} />
+                        )}
 
-                    {/* Entity markers */}
-                    {entities.map((entity) => (
-                        <EntityOrb
-                            key={entity.id}
-                            entity={entity}
-                            position={coordsTo3D(entity.coordinates.x, entity.coordinates.y, 8)}
-                            colors={colors}
-                            onClick={() => onEntityClick(entity.id)}
+                        {/* Lighting */}
+                        <ambientLight intensity={0.5} />
+                        <pointLight position={[10, 10, 10]} intensity={0.8} color={colors.glow} />
+                        <pointLight position={[-10, -5, -10]} intensity={0.4} color={colors.primary} />
+
+                        {/* Entity markers */}
+                        {entities.map((entity) => (
+                            <EntityOrb
+                                key={entity.id}
+                                entity={entity}
+                                position={coordsTo3D(entity.coordinates.x, entity.coordinates.y, 8)}
+                                colors={colors}
+                                onClick={() => onEntityClick(entity.id)}
+                            />
+                        ))}
+
+                        {/* Disney Multiplane Camera — layered parallax planes */}
+                        <MultiplaneCamera theme={theme} />
+
+                        {/* Atmospheric effects */}
+                        <AtmosphericParticles colors={colors} />
+                        <GroundPlane colors={colors} />
+
+                        {/* Camera controls */}
+                        <OrbitControls
+                            enableZoom={false}
+                            enablePan={false}
+                            rotateSpeed={0.5}
+                            minPolarAngle={Math.PI * 0.3}
+                            maxPolarAngle={Math.PI * 0.7}
                         />
-                    ))}
+                    </Suspense>
+                </Canvas>
+            </CanvasErrorBoundary>
 
-                    {/* Camera controls */}
-                    <OrbitControls
-                        enableZoom={false}
-                        enablePan={false}
-                        rotateSpeed={0.5}
-                        minPolarAngle={Math.PI * 0.3}
-                        maxPolarAngle={Math.PI * 0.7}
-                    />
-                </Suspense>
-            </Canvas>
-
-            {/* Loading overlay */}
-            {isLoading && <LoadingOverlay theme={theme} />}
+            {/* Subtle non-blocking loading indicator */}
+            <LoadingPill theme={theme} visible={isLoading} />
 
             {/* Back button */}
             {onBack && (
@@ -439,6 +806,41 @@ export const ImmersiveWorld: React.FC<ImmersiveWorldProps> = ({
             >
                 {theme.replace('_', ' ')} · {entities.length} Entities
             </div>
+
+            {/* Enter Board / Operations button */}
+            {onEnterBoard && (
+                <button
+                    onClick={onEnterBoard}
+                    style={{
+                        position: 'absolute',
+                        top: '24px',
+                        right: '24px',
+                        zIndex: 50,
+                        background: `${colors.primary}`,
+                        color: '#000',
+                        border: 'none',
+                        padding: '14px 28px',
+                        fontSize: '12px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.15em',
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                        fontFamily: 'system-ui, sans-serif',
+                        transition: 'all 0.3s ease',
+                        boxShadow: `0 0 30px ${colors.glow}40`,
+                    }}
+                    onMouseEnter={(e) => {
+                        e.currentTarget.style.boxShadow = `0 0 50px ${colors.glow}80`;
+                        e.currentTarget.style.transform = 'scale(1.05)';
+                    }}
+                    onMouseLeave={(e) => {
+                        e.currentTarget.style.boxShadow = `0 0 30px ${colors.glow}40`;
+                        e.currentTarget.style.transform = 'scale(1)';
+                    }}
+                >
+                    ▸ Enter Operations
+                </button>
+            )}
 
             {/* Controls hint */}
             <div

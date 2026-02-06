@@ -46,6 +46,13 @@ import {
   sendEntityChatMessage
 } from './services/geminiService';
 import { StudioExperience } from './src/components/StudioExperience';
+import { GameBoard, GameBoardView } from './src/components/GameBoard';
+
+// App view modes:
+// 'IMMERSIVE' = StudioExperience (theme selector + 3D world)
+// 'BOARD'     = GameBoard (strategic operations map with 5 views)
+// 'DETAIL'    = EntityDetailView (deep dive on entity)
+type AppViewMode = 'IMMERSIVE' | 'BOARD' | 'DETAIL';
 
 // Define AIStudio interface locally to avoid global declaration conflicts
 interface AIStudio {
@@ -289,13 +296,23 @@ const EntityDetailView = ({
   };
 
   const handleScenarioRun = async () => {
-    if (!entity.imageUrl) return;
+    if (!scenarioPrompt.trim()) return;
     setIsSimulating(true);
     try {
-      const newImage = await modifyRoomScenario(entity.imageUrl, scenarioPrompt);
-      if (newImage) {
-        onUpdateEntity({ ...entity, imageUrl: newImage });
-        setScenarioPrompt('');
+      if (entity.imageUrl) {
+        // Modify existing image
+        const newImage = await modifyRoomScenario(entity.imageUrl, scenarioPrompt);
+        if (newImage) {
+          onUpdateEntity({ ...entity, imageUrl: newImage });
+          setScenarioPrompt('');
+        }
+      } else {
+        // Generate fresh visual from prompt
+        const newImage = await generateEntityVisual(entity, scenarioPrompt);
+        if (newImage) {
+          onUpdateEntity({ ...entity, imageUrl: newImage });
+          setScenarioPrompt('');
+        }
       }
     } finally {
       setIsSimulating(false);
@@ -366,7 +383,26 @@ const EntityDetailView = ({
             />
           ) : (
             <div className="w-full h-full relative group">
-              <img src={entity.imageUrl} className="w-full h-full object-cover" alt="Space" />
+              {/* Entity visual — show image if available, otherwise atmospheric fallback */}
+              {entity.imageUrl ? (
+                <img src={entity.imageUrl} className="w-full h-full object-cover" alt={entity.name} />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center"
+                  style={{
+                    background: `linear-gradient(135deg, ${theme.colors.bg}, ${theme.colors.surface}, ${theme.colors.bg})`,
+                  }}
+                >
+                  <div className="text-center opacity-60">
+                    <Scan size={64} style={{ color: theme.colors.accent }} className="mx-auto mb-4" />
+                    <p className="text-sm uppercase tracking-widest" style={{ color: theme.colors.text }}>
+                      No visual generated yet
+                    </p>
+                    <p className="text-xs mt-2 opacity-50" style={{ color: theme.colors.text }}>
+                      Use the Visual Command Line below to create one
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Visual Actions Overlay */}
               <div className="absolute top-6 right-6 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -492,12 +528,10 @@ export default function App() {
   const [entities, setEntities] = useState<BusinessEntity[]>(INITIAL_ENTITIES);
   const [processingGap, setProcessingGap] = useState<{ entityId: string, gap: BusinessGap } | null>(null);
 
-  // Immersive View State
+  // View mode: IMMERSIVE (3D world) → BOARD (strategic map) → DETAIL (entity deep dive)
+  const [viewMode, setViewMode] = useState<AppViewMode>('IMMERSIVE');
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
-
-  // Tab State / View Mode (Unified Map as Board)
-  // 'BOARD' is now the interactive map. 'STUDIO' is an overlay.
-  const [activeTab, setActiveTab] = useState<'BOARD'>('BOARD');
+  const [activeBoardView, setActiveBoardView] = useState<GameBoardView>('ECOSYSTEM');
 
   // Floating Panel States
   const [isScoutOpen, setIsScoutOpen] = useState(false);
@@ -632,7 +666,12 @@ export default function App() {
 
   // --- RENDER ---
 
-  if (!selectedThemeId || !currentTheme) {
+  // Find entities for detail view
+  const selectedEntity = selectedEntityId ? entities.find(e => e.id === selectedEntityId) : null;
+  const originalEntity = selectedEntityId ? INITIAL_ENTITIES.find(e => e.id === selectedEntityId) : null;
+
+  // === VIEW 1: IMMERSIVE (Theme Selector + 3D World) ===
+  if (viewMode === 'IMMERSIVE') {
     return (
       <StudioExperience
         entities={entities.map(e => ({
@@ -645,285 +684,217 @@ export default function App() {
           coordinates: e.coordinates || { x: 50, y: 50 },
           gaps: e.gaps.map(g => ({ priority: g.priority, status: g.status })),
         }))}
-        onEntitySelect={(entityId) => setSelectedEntityId(entityId)}
-        onThemeSelect={(themeId) => setSelectedThemeId(themeId)}
+        onEntitySelect={(entityId) => {
+          // Entity clicked in 3D world → go to detail view
+          setSelectedEntityId(entityId);
+          setViewMode('DETAIL');
+        }}
+        onThemeSelect={(themeId) => {
+          if (themeId) {
+            setSelectedThemeId(themeId);
+          } else {
+            // Back to selector (null theme)
+            setSelectedThemeId(null);
+          }
+        }}
+        onEnterBoard={() => {
+          // "Enter Operations" clicked in 3D world → go to board view
+          setViewMode('BOARD');
+        }}
         selectedThemeId={selectedThemeId}
       />
     );
   }
 
-  // Find original entity to allow resetting visuals
-  const selectedEntity = selectedEntityId ? entities.find(e => e.id === selectedEntityId) : null;
-  const originalEntity = selectedEntityId ? INITIAL_ENTITIES.find(e => e.id === selectedEntityId) : null;
+  // Need a theme for BOARD and DETAIL views
+  if (!currentTheme) {
+    // Safety fallback — shouldn't happen
+    setViewMode('IMMERSIVE');
+    return null;
+  }
 
-  return (
-    <div
-      className="min-h-screen transition-colors duration-700 flex flex-col relative overflow-hidden"
-      style={{ backgroundColor: currentTheme.colors.bg }}
-    >
-      {/* MAP BACKGROUND */}
-      <div className="absolute inset-0 z-0">
-        {/* Strategic Grid Overlay */}
-        <div className="absolute inset-0 opacity-10"
-          style={{
-            backgroundImage: `linear-gradient(${currentTheme.colors.border} 1px, transparent 1px), linear-gradient(90deg, ${currentTheme.colors.border} 1px, transparent 1px)`,
-            backgroundSize: '100px 100px'
-          }}
-        />
-        {/* Abstract Map Nodes */}
-        {entities.map(entity => (
-          <MapMarker
-            key={entity.id}
-            entity={entity}
-            theme={currentTheme}
-            onClick={() => setSelectedEntityId(entity.id)}
-          />
-        ))}
-      </div>
-
-      {/* FLOATING HUD (Top Left) */}
-      <div className="absolute top-6 left-6 z-40">
-        <div className={`p-4 backdrop-blur-md border ${currentTheme.styles.rounded} ${currentTheme.styles.shadow}`}
-          style={{ backgroundColor: `${currentTheme.colors.bg}CC`, borderColor: currentTheme.colors.border }}
+  // === VIEW 2: BOARD (Strategic Operations Map with GameBoard) ===
+  if (viewMode === 'BOARD') {
+    return (
+      <div
+        className="min-h-screen transition-colors duration-700 flex flex-col relative overflow-hidden"
+        style={{ backgroundColor: currentTheme.colors.bg }}
+      >
+        {/* Header Bar */}
+        <div
+          className="flex items-center justify-between p-6 border-b z-10"
+          style={{ borderColor: currentTheme.colors.border, backgroundColor: currentTheme.colors.bg }}
         >
-          <h1 className="text-lg font-bold leading-none mb-1" style={{ fontFamily: currentTheme.fonts.heading, color: currentTheme.colors.text }}>THE STUDIO</h1>
-          <p className="text-[10px] uppercase tracking-widest opacity-60" style={{ color: currentTheme.colors.text }}>Strategic Operations Map</p>
-
-          <div className="mt-4 flex flex-col gap-2">
+          <div className="flex items-center gap-4">
             <button
-              onClick={() => setSelectedThemeId(null)}
-              className="text-xs hover:opacity-70 text-left"
+              onClick={() => setViewMode('IMMERSIVE')}
+              className="text-xs hover:opacity-70 flex items-center gap-2"
               style={{ color: currentTheme.colors.text }}
             >
-              ← Change Territory
+              <ArrowRight className="rotate-180" size={16} />
+              <span className="uppercase tracking-widest font-bold">Back to World</span>
+            </button>
+            <div className="w-px h-8 opacity-20" style={{ backgroundColor: currentTheme.colors.text }} />
+            <div>
+              <h1
+                className="text-lg font-bold leading-none"
+                style={{ fontFamily: currentTheme.fonts.heading, color: currentTheme.colors.text }}
+              >
+                THE STUDIO
+              </h1>
+              <p
+                className="text-[10px] uppercase tracking-widest opacity-60"
+                style={{ color: currentTheme.colors.text }}
+              >
+                {currentTheme.name} · Strategic Operations
+              </p>
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            {/* Scout button */}
+            <button
+              onClick={() => setIsScoutOpen(!isScoutOpen)}
+              className={`flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-widest border transition-colors ${currentTheme.styles.rounded}`}
+              style={{
+                backgroundColor: isScoutOpen ? currentTheme.colors.accent : 'transparent',
+                color: isScoutOpen ? currentTheme.colors.bg : currentTheme.colors.text,
+                borderColor: currentTheme.colors.border
+              }}
+            >
+              <Globe size={14} />
+              Scout
+            </button>
+            {/* Studio button */}
+            <button
+              onClick={() => setIsStudioOpen(!isStudioOpen)}
+              className={`flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-widest border transition-colors ${currentTheme.styles.rounded}`}
+              style={{
+                backgroundColor: isStudioOpen ? currentTheme.colors.accent : 'transparent',
+                color: isStudioOpen ? currentTheme.colors.bg : currentTheme.colors.text,
+                borderColor: currentTheme.colors.border
+              }}
+            >
+              <Film size={14} />
+              Studio
             </button>
           </div>
         </div>
-      </div>
 
-      {/* FLOATING TOOLS (Top Right) */}
-      <div className="absolute top-6 right-6 z-40 flex flex-col gap-4 items-end">
+        {/* Main Content: GameBoard */}
+        <div className="flex-grow overflow-y-auto p-6">
+          <GameBoard
+            entities={entities}
+            theme={currentTheme}
+            activeView={activeBoardView}
+            onViewChange={setActiveBoardView}
+            onEntityClick={(entity) => {
+              setSelectedEntityId(entity.id);
+              setViewMode('DETAIL');
+            }}
+            onGapClick={handleGapClick}
+          />
+        </div>
 
-        {/* SCOUT TOGGLE */}
-        <button
-          onClick={() => setIsScoutOpen(!isScoutOpen)}
-          className={`group flex items-center gap-3 px-5 py-3 transition-all ${currentTheme.styles.rounded} ${currentTheme.styles.shadow}`}
-          style={{
-            backgroundColor: isScoutOpen ? currentTheme.colors.accent : currentTheme.colors.surface,
-            color: isScoutOpen ? currentTheme.colors.bg : currentTheme.colors.text,
-            border: `1px solid ${currentTheme.colors.border}`
-          }}
-        >
-          <span className="text-xs font-bold uppercase tracking-widest hidden md:block">Market Scout</span>
-          <Globe size={20} />
-        </button>
-
-        {/* SCOUT PANEL */}
+        {/* Scout Panel (floating overlay) */}
         {isScoutOpen && (
-          <div className={`w-96 p-6 backdrop-blur-md border animate-in slide-in-from-right duration-300 ${currentTheme.styles.rounded} ${currentTheme.styles.shadow}`}
-            style={{ backgroundColor: `${currentTheme.colors.bg}F2`, borderColor: currentTheme.colors.border }}
-          >
-            <h3 className="text-lg font-bold mb-4" style={{ fontFamily: currentTheme.fonts.heading, color: currentTheme.colors.text }}>
-              Regional Intelligence
-            </h3>
-
-            <div className="space-y-4 mb-6">
-              <div>
-                <label className="text-[10px] uppercase opacity-50 block mb-1" style={{ color: currentTheme.colors.text }}>Target Market</label>
-                <input
-                  type="text"
-                  value={scoutLocation}
-                  onChange={(e) => setScoutLocation(e.target.value)}
-                  className="w-full bg-transparent border-b p-2 text-sm focus:outline-none"
-                  style={{ borderColor: currentTheme.colors.border, color: currentTheme.colors.text }}
-                />
+          <div className="fixed top-20 right-6 z-50 w-96">
+            <div className={`p-6 backdrop-blur-md border ${currentTheme.styles.rounded} ${currentTheme.styles.shadow}`}
+              style={{ backgroundColor: `${currentTheme.colors.bg}F2`, borderColor: currentTheme.colors.border }}
+            >
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-bold" style={{ fontFamily: currentTheme.fonts.heading, color: currentTheme.colors.text }}>
+                  Regional Intelligence
+                </h3>
+                <button onClick={() => setIsScoutOpen(false)} style={{ color: currentTheme.colors.text }}><X size={16} /></button>
               </div>
-              <div>
-                <label className="text-[10px] uppercase opacity-50 block mb-1" style={{ color: currentTheme.colors.text }}>Venture Category</label>
-                <input
-                  type="text"
-                  value={scoutCategory}
-                  onChange={(e) => setScoutCategory(e.target.value)}
-                  className="w-full bg-transparent border-b p-2 text-sm focus:outline-none"
-                  style={{ borderColor: currentTheme.colors.border, color: currentTheme.colors.text }}
-                />
-              </div>
-              <button
-                onClick={handleScoutAnalysis}
-                disabled={isScouting}
-                className="w-full py-3 text-xs font-bold uppercase tracking-widest hover:brightness-110 flex items-center justify-center gap-2"
-                style={{ backgroundColor: currentTheme.colors.accent, color: currentTheme.colors.bg }}
-              >
-                {isScouting ? <Loader2 className="animate-spin" size={14} /> : <Target size={14} />}
-                Run Market Analysis
-              </button>
-            </div>
-
-            {/* ANALYSIS RESULTS */}
-            {marketAnalysis && (
-              <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-                {/* Verdict Card */}
-                <div className="p-4 border border-l-4" style={{ borderColor: currentTheme.colors.border, borderLeftColor: currentTheme.colors.accent, backgroundColor: currentTheme.colors.surface }}>
-                  <div className="flex items-center gap-2 mb-2">
-                    <TrendingUp size={16} style={{ color: currentTheme.colors.accent }} />
-                    <span className="text-xs font-bold uppercase" style={{ color: currentTheme.colors.text }}>Capital Strategy</span>
-                  </div>
-                  <p className="text-sm font-bold mb-1" style={{ color: currentTheme.colors.text }}>{marketAnalysis.capitalStrategy.capitalRatio}</p>
-                  <p className="text-xs opacity-80 leading-relaxed" style={{ color: currentTheme.colors.text }}>
-                    {marketAnalysis.capitalStrategy.verdict}
-                  </p>
-                </div>
-
-                {/* Competitors vs Concept */}
+              <div className="space-y-4 mb-4">
                 <div>
-                  <h4 className="text-xs font-bold uppercase opacity-50 mb-3" style={{ color: currentTheme.colors.text }}>Market Landscape</h4>
-
-                  {/* Real Competitors */}
+                  <label className="text-[10px] uppercase opacity-50 block mb-1" style={{ color: currentTheme.colors.text }}>Target Market</label>
+                  <input type="text" value={scoutLocation} onChange={(e) => setScoutLocation(e.target.value)}
+                    className="w-full bg-transparent border-b p-2 text-sm focus:outline-none"
+                    style={{ borderColor: currentTheme.colors.border, color: currentTheme.colors.text }} />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase opacity-50 block mb-1" style={{ color: currentTheme.colors.text }}>Venture Category</label>
+                  <input type="text" value={scoutCategory} onChange={(e) => setScoutCategory(e.target.value)}
+                    className="w-full bg-transparent border-b p-2 text-sm focus:outline-none"
+                    style={{ borderColor: currentTheme.colors.border, color: currentTheme.colors.text }} />
+                </div>
+                <button onClick={handleScoutAnalysis} disabled={isScouting}
+                  className="w-full py-3 text-xs font-bold uppercase tracking-widest hover:brightness-110 flex items-center justify-center gap-2"
+                  style={{ backgroundColor: currentTheme.colors.accent, color: currentTheme.colors.bg }}>
+                  {isScouting ? <Loader2 className="animate-spin" size={14} /> : <Target size={14} />}
+                  Run Market Analysis
+                </button>
+              </div>
+              {marketAnalysis && (
+                <div className="max-h-[50vh] overflow-y-auto space-y-4">
+                  <div className="p-3 border-l-4" style={{ borderColor: currentTheme.colors.accent, backgroundColor: currentTheme.colors.surface }}>
+                    <p className="text-sm font-bold" style={{ color: currentTheme.colors.text }}>{marketAnalysis.capitalStrategy.capitalRatio}</p>
+                    <p className="text-xs opacity-80" style={{ color: currentTheme.colors.text }}>{marketAnalysis.capitalStrategy.verdict}</p>
+                  </div>
                   {marketAnalysis.competitors.map((comp, idx) => (
-                    <div key={idx} className="mb-3 p-3 border-l border-white/20 bg-white/5">
-                      <div className="flex justify-between items-start mb-1">
-                        <span className="font-bold text-sm" style={{ color: currentTheme.colors.text }}>{comp.name}</span>
-                        <span className="text-[10px] opacity-50 text-right">{comp.pricePoint}</span>
-                      </div>
-                      <p className="text-[10px] opacity-70 leading-snug mb-2" style={{ color: currentTheme.colors.text }}>{comp.description}</p>
-                      <div className="flex flex-wrap gap-1">
-                        {comp.strengths.slice(0, 2).map((s, i) => (
-                          <span key={i} className="text-[9px] px-1 bg-green-500/10 text-green-400 rounded-sm">+{s}</span>
-                        ))}
-                      </div>
+                    <div key={idx} className="p-3 border-l border-white/20 bg-white/5">
+                      <span className="font-bold text-sm" style={{ color: currentTheme.colors.text }}>{comp.name}</span>
+                      <p className="text-[10px] opacity-70" style={{ color: currentTheme.colors.text }}>{comp.description}</p>
                     </div>
                   ))}
-
-                  {/* The Ghost Concept */}
-                  <div className="mt-4 p-4 border relative overflow-hidden" style={{ borderColor: currentTheme.colors.accent, backgroundColor: `${currentTheme.colors.accent}10` }}>
-                    <div className="absolute top-0 right-0 p-1 bg-amber-500 text-black text-[8px] font-bold uppercase tracking-widest">Brand Imprint</div>
-                    <h4 className="font-bold text-sm mb-1" style={{ color: currentTheme.colors.accent }}>{marketAnalysis.ourConcept.name}</h4>
-                    <p className="text-xs mb-3 italic" style={{ color: currentTheme.colors.text }}>"{marketAnalysis.ourConcept.description}"</p>
-
-                    <div className="flex items-start gap-2 mb-3">
-                      <Zap size={14} className="mt-0.5 text-amber-500" />
-                      <div>
-                        <span className="text-[10px] font-bold uppercase block text-amber-500">Network Leverage</span>
-                        <p className="text-[10px] opacity-80" style={{ color: currentTheme.colors.text }}>{marketAnalysis.capitalStrategy.valueLeverage}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* STUDIO TOGGLE */}
-        <button
-          onClick={() => setIsStudioOpen(!isStudioOpen)}
-          className={`group flex items-center gap-3 px-5 py-3 transition-all ${currentTheme.styles.rounded} ${currentTheme.styles.shadow}`}
-          style={{
-            backgroundColor: isStudioOpen ? currentTheme.colors.accent : currentTheme.colors.surface,
-            color: isStudioOpen ? currentTheme.colors.bg : currentTheme.colors.text,
-            border: `1px solid ${currentTheme.colors.border}`
-          }}
-        >
-          <span className="text-xs font-bold uppercase tracking-widest hidden md:block">Production Studio</span>
-          <Film size={20} />
-        </button>
-
-        {/* STUDIO PANEL */}
-        {isStudioOpen && (
-          <div className={`w-[450px] p-6 backdrop-blur-md border animate-in slide-in-from-right duration-300 ${currentTheme.styles.rounded} ${currentTheme.styles.shadow}`}
-            style={{ backgroundColor: `${currentTheme.colors.bg}F2`, borderColor: currentTheme.colors.border }}
-          >
-            <div className="mb-6 flex justify-between items-end">
-              <h3 className="text-lg font-bold" style={{ fontFamily: currentTheme.fonts.heading, color: currentTheme.colors.text }}>
-                Veo Generator
-              </h3>
-              <div className="flex items-center gap-2 px-2 py-0.5 bg-white/5 rounded border border-white/10">
-                <CreditCard size={10} className="opacity-50" style={{ color: currentTheme.colors.text }} />
-                <span className="text-[9px] uppercase font-mono opacity-50" style={{ color: currentTheme.colors.text }}>Paid (Veo 3.1)</span>
-              </div>
-            </div>
-
-            {/* Asset Bin */}
-            <div className="mb-4">
-              <div className="flex gap-2 overflow-x-auto pb-2">
-                {studioImages.map((src, i) => (
-                  <div key={i} className="flex-shrink-0 w-24 h-16 relative bg-black/50 border border-white/10 group">
-                    <img src={src} alt={`Keyframe ${i}`} className="w-full h-full object-cover" />
-                    <button
-                      onClick={() => setStudioImages(prev => prev.filter((_, idx) => idx !== i))}
-                      className="absolute top-0 right-0 bg-red-500 text-white p-0.5 opacity-0 group-hover:opacity-100"
-                    >
-                      <X size={10} />
-                    </button>
-                  </div>
-                ))}
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex-shrink-0 w-24 h-16 flex flex-col items-center justify-center border border-dashed hover:bg-white/5 transition-colors"
-                  style={{ borderColor: currentTheme.colors.muted, color: currentTheme.colors.muted }}
-                >
-                  <Plus size={16} />
-                  <span className="text-[8px] uppercase mt-1">Add Asset</span>
-                </button>
-                <input type="file" multiple accept="image/*" ref={fileInputRef} className="hidden" onChange={handleImageImport} />
-              </div>
-            </div>
-
-            {/* Monitor */}
-            <div className="aspect-video bg-black relative flex items-center justify-center border border-white/10 mb-4 overflow-hidden">
-              {generatedReelUrl ? (
-                <video controls autoPlay loop src={generatedReelUrl} className="w-full h-full object-contain" />
-              ) : (
-                <div className="text-center opacity-30">
-                  {isGeneratingReel ? <Loader2 className="animate-spin mx-auto" /> : <Film className="mx-auto" />}
-                  <p className="text-[10px] uppercase mt-2 font-mono">
-                    {isGeneratingReel ? 'Rendering...' : 'No Signal'}
-                  </p>
                 </div>
               )}
             </div>
-
-            {/* Controls */}
-            <div className="flex gap-2">
-              <textarea
-                value={reelPrompt}
-                onChange={(e) => setReelPrompt(e.target.value)}
-                placeholder="Director's vision..."
-                className="flex-grow bg-black/20 p-2 text-xs focus:outline-none border border-transparent focus:border-white/20 resize-none h-10"
-                style={{ color: currentTheme.colors.text }}
-              />
-              <button
-                onClick={handleCreateReel}
-                disabled={isGeneratingReel || studioImages.length === 0}
-                className="px-4 bg-amber-500 text-black font-bold uppercase text-xs hover:bg-amber-400 disabled:opacity-50"
-              >
-                Action
-              </button>
-            </div>
           </div>
         )}
 
-      </div>
-
-      {/* Dialogs & Overlays */}
-      <GapSolverDialog
-        isOpen={!!processingGap}
-        onClose={() => setProcessingGap(null)}
-        theme={currentTheme}
-        gap={processingGap?.gap || null}
-        onSolve={handleSolveGap}
-      />
-
-      {/* IMMERSIVE ENTITY DETAIL */}
-      {selectedEntity && originalEntity && (
-        <EntityDetailView
-          entity={selectedEntity}
-          originalEntity={originalEntity}
+        {/* Gap Solver Dialog */}
+        <GapSolverDialog
+          isOpen={!!processingGap}
+          onClose={() => setProcessingGap(null)}
           theme={currentTheme}
-          onClose={() => setSelectedEntityId(null)}
-          onUpdateEntity={handleUpdateEntity}
+          gap={processingGap?.gap || null}
+          onSolve={handleSolveGap}
         />
-      )}
-    </div>
-  );
+      </div>
+    );
+  }
+
+  // === VIEW 3: ENTITY DETAIL ===
+  if (viewMode === 'DETAIL' && selectedEntity && originalEntity) {
+    return (
+      <EntityDetailView
+        entity={selectedEntity}
+        originalEntity={originalEntity}
+        theme={currentTheme}
+        onClose={() => {
+          setSelectedEntityId(null);
+          // Go back to board if we have a theme, otherwise immersive
+          setViewMode(selectedThemeId ? 'BOARD' : 'IMMERSIVE');
+        }}
+        onUpdateEntity={handleUpdateEntity}
+      />
+    );
+  }
+
+  // Fallback: go back to immersive
+  if (viewMode === 'DETAIL') {
+    // Entity not found — go back
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ backgroundColor: currentTheme?.colors.bg || '#000' }}
+      >
+        <div className="text-center">
+          <p className="text-white/60 mb-4">Entity not found</p>
+          <button
+            onClick={() => { setSelectedEntityId(null); setViewMode('IMMERSIVE'); }}
+            className="px-6 py-3 bg-white/10 text-white border border-white/20 text-xs uppercase tracking-widest"
+          >
+            Back to Territories
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
 }

@@ -1,15 +1,14 @@
 /**
  * StudioExperience.tsx
- * 
+ *
  * Full immersive experience flow for The Studio.
  * Manages state transitions between:
  * 1. Theme selector (pick a territory)
  * 2. Immersive 3D world (explore entities in 360°)
- * 3. Entity detail (deep dive on specific entity)
- * 
- * This is a self-contained component that can replace the existing
- * theme selector + gameboard flow without modifying App.tsx's architecture.
- * 
+ *
+ * When an entity is clicked or "Enter Operations" is pressed,
+ * the parent (App.tsx) takes over rendering via callbacks.
+ *
  * Owner: AG (Antigravity)
  */
 
@@ -36,16 +35,17 @@ interface EntityMinimal {
     gaps?: Array<{ priority: string; status: string }>;
 }
 
-// Experience states
+// Experience states — only SELECTOR and WORLD now
+// DETAIL is handled by parent App.tsx
 type ExperienceState =
     | { mode: 'SELECTOR' }
-    | { mode: 'WORLD'; themeId: ThemeId; skyboxUrl: string | null }
-    | { mode: 'DETAIL'; themeId: ThemeId; entityId: string };
+    | { mode: 'WORLD'; themeId: ThemeId; skyboxUrl: string | null };
 
 interface StudioExperienceProps {
     entities: EntityMinimal[];
     onEntitySelect: (entityId: string) => void;
     onThemeSelect: (themeId: ThemeId) => void;
+    onEnterBoard?: () => void;
     selectedThemeId?: ThemeId | null;
 }
 
@@ -72,6 +72,7 @@ export const StudioExperience: React.FC<StudioExperienceProps> = ({
     entities,
     onEntitySelect,
     onThemeSelect,
+    onEnterBoard,
     selectedThemeId
 }) => {
     const [state, setState] = useState<ExperienceState>({ mode: 'SELECTOR' });
@@ -149,20 +150,24 @@ export const StudioExperience: React.FC<StudioExperienceProps> = ({
         }
     }, [skyboxCache, isGenerating, onThemeSelect]);
 
-    // Handle entity click in world
+    // Handle entity click in world — delegate to parent immediately
     const handleEntityClick = useCallback((entityId: string) => {
-        if (state.mode === 'WORLD') {
-            // Transition to detail view
-            setState({ mode: 'DETAIL', themeId: state.themeId, entityId });
-            onEntitySelect(entityId);
-        }
-    }, [state, onEntitySelect]);
+        // Parent (App.tsx) will switch viewMode to 'DETAIL' and render EntityDetailView
+        onEntitySelect(entityId);
+    }, [onEntitySelect]);
 
     // Handle back from world to selector
     const handleBackToSelector = useCallback(() => {
         setState({ mode: 'SELECTOR' });
         onThemeSelect(null as any);
     }, [onThemeSelect]);
+
+    // Handle "Enter Operations" — delegate to parent for BOARD view
+    const handleEnterBoard = useCallback(() => {
+        if (onEnterBoard) {
+            onEnterBoard();
+        }
+    }, [onEnterBoard]);
 
     // Render based on state
     switch (state.mode) {
@@ -181,14 +186,10 @@ export const StudioExperience: React.FC<StudioExperienceProps> = ({
                     entities={entities}
                     onEntityClick={handleEntityClick}
                     onBack={handleBackToSelector}
+                    onEnterBoard={handleEnterBoard}
                     isLoading={isGenerating}
                 />
             );
-
-        case 'DETAIL':
-            // For now, just notify parent and let it show the detail view
-            // Parent will render GameBoard or EntityDetail based on selectedThemeId + entityId
-            return null;
 
         default:
             return null;
