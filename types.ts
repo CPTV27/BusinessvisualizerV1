@@ -33,7 +33,26 @@ export enum EntityType {
   VENUE = 'VENUE',
   BRAND = 'BRAND',
   EXPERIENCE = 'EXPERIENCE',
-  DEVELOPMENT = 'DEVELOPMENT'
+  DEVELOPMENT = 'DEVELOPMENT',
+  PACKAGE = 'PACKAGE',
+  PROGRAM = 'PROGRAM',
+  ROOM_CATEGORY = 'ROOM_CATEGORY'
+}
+
+export enum ServiceLayer {
+  FOUNDATION = 'FOUNDATION',
+  NETWORK = 'NETWORK', 
+  MACHINE = 'MACHINE',
+  BUSINESS = 'BUSINESS'
+}
+
+export interface LayerMapping {
+  entityId: string;
+  layer: ServiceLayer;
+  readinessScore: number; // 0-100
+  revenueImpact: 'HIGH' | 'MEDIUM' | 'LOW';
+  buildCost: number;
+  roi: number;
 }
 
 export enum GapStatus {
@@ -63,6 +82,7 @@ export interface BusinessEntity {
   location?: string;
   address?: string; // Real world address for Maps
   type: EntityType;
+  layer?: ServiceLayer; // Strategic layer from Discovery Model
   description: string;
   kpi: string;
   kpiValue: string;
@@ -70,6 +90,29 @@ export interface BusinessEntity {
   imageUrl?: string; // The Space (Environment)
   whiteboardUrl?: string; // The War Room (Business Logic)
   chatHistory?: ChatMessage[]; // The persistent notebook
+  coordinates?: { x: number; y: number }; // Percentage position on the strategic map (0-100)
+}
+
+export interface Competitor {
+  name: string;
+  type: 'EXISTING' | 'CONCEPT';
+  description: string;
+  pricePoint: string;
+  strengths: string[];
+  weaknesses: string[];
+}
+
+export interface MarketAnalysis {
+  region: string;
+  category: string;
+  competitors: Competitor[]; // 2 Real
+  ourConcept: Competitor; // 1 Ghost Concept
+  capitalStrategy: {
+    estimatedEntryCost: string;
+    valueLeverage: string; // How network amplifies value
+    capitalRatio: string; // e.g. "Low Spend / High Yield"
+    verdict: string;
+  };
 }
 
 export interface ScoutResult {

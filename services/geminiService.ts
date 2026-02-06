@@ -1,5 +1,5 @@
-import { GoogleGenAI, GenerateContentResponse, VideoGenerationReferenceImage, VideoGenerationReferenceType } from "@google/genai";
-import { BusinessEntity, BusinessGap, ChatMessage } from "../types";
+import { GoogleGenAI, GenerateContentResponse, VideoGenerationReferenceImage, VideoGenerationReferenceType, Type } from "@google/genai";
+import { BusinessEntity, BusinessGap, ChatMessage, ServiceLayer, MarketAnalysis } from "../types";
 
 // Helper to get fresh instance (important for Veo key switching)
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
@@ -14,13 +14,26 @@ export const generateGapSolutions = async (
   const apiKey = process.env.API_KEY;
   if (!apiKey) return ["API Key missing."];
 
+  const layerContext = entity.layer ? `Entity Layer: ${entity.layer} (Part of the Discovery Model).` : "";
+
   const prompt = `
-    You are 'Sidekick', a strategic creative director.
-    Context: Entity '${entity.name}' (${entity.description}).
-    Gap: ${gap.description}.
-    Style: ${themeDescription}.
-    ${userGuidance ? `Director's Note: "${userGuidance}". Expand on this.` : `Task: 3 creative solutions.`}
-    Keep it brief.
+    You are 'Sidekick', a strategic creative director for Big Muddy.
+    
+    Target Context:
+    - Entity: '${entity.name}' (${entity.description}).
+    - ${layerContext}
+    - Gap: ${gap.description}.
+    - Visual Style: ${themeDescription}.
+    
+    Task:
+    Provide 3 strategic solutions to close this gap.
+    1. Include competitive analysis framing (how this sets us apart).
+    2. Include rough estimated costs and timelines for each solution.
+    3. Ensure solutions drive towards the revenue target of 200 bookings/quarter @ $500 avg.
+
+    ${userGuidance ? `Director's Note: "${userGuidance}". Expand on this specific direction.` : ``}
+    
+    Keep the output structured as bullet points.
   `;
 
   try {
@@ -31,7 +44,8 @@ export const generateGapSolutions = async (
     });
 
     const text = response.text || "";
-    return text.split(/\n/).filter(line => line.trim().length > 0).map(line => line.replace(/^[-\d.]+\s*/, '')).slice(0, 3);
+    // Clean up response for UI display
+    return text.split(/\n/).filter(line => line.trim().length > 0 && (line.trim().startsWith('-') || line.trim().match(/^\d/))).slice(0, 3);
   } catch (error) {
     console.error("Gemini API Error:", error);
     return ["AI Offline."];
@@ -145,36 +159,89 @@ export const modifyRoomScenario = async (
   }
 };
 
-export const scoutRegionalBusinesses = async (
+export const performMarketAnalysis = async (
   location: string,
-  demographic: string
-): Promise<{ text: string, chunks: any[] }> => {
+  category: string
+): Promise<MarketAnalysis | null> => {
   const ai = getAI();
   const apiKey = process.env.API_KEY;
-  if (!apiKey) return { text: "API Key Missing", chunks: [] };
+  if (!apiKey) return null;
+
+  const prompt = `
+    Conduct a Comparative Market Analysis (CMA) for:
+    Region: ${location}
+    Venture Category: ${category}
+
+    Step 1: Identify 2 REAL, existing top competitors in this specific area for this category using Google Search.
+    Step 2: Invent a 3rd "Ghost Concept" (The "Brand Imprint"). This is a hypothetical venture owned by 'Chase Pierson Productions'.
+            - It should use the "Big Muddy" brand network (Music, Art, Media) to win.
+            - It should find a capital inefficiency (e.g., buying cheap real estate) and amplifying it with vibe/network.
+            - Example: "Tiny House Village Festival Hub" or "Artist Residency Multifamily".
+
+    Step 3: Analyze the Capital Strategy.
+            - How do we use network value to amplify returns rather than just spending cash?
+    
+    Output JSON format only.
+  `;
 
   try {
-    // Robust prompt to handle if user enters a URL or weird text
-    const prompt = `
-      User Input: "${location}".
-      Task: If the input is a URL or invalid location, try to infer the region or default to "Natchez, MS".
-      Then, find 5 real businesses in that region that match: ${demographic}.
-      Focus on hospitality, music venues, and high-end retail.
-    `;
-
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-2.5-flash', // Using 2.5 for search tool availability and speed
       contents: prompt,
-      config: { tools: [{googleMaps: {}}] }
+      config: {
+        tools: [{ googleSearch: {} }],
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            region: { type: Type.STRING },
+            category: { type: Type.STRING },
+            competitors: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  type: { type: Type.STRING, enum: ["EXISTING", "CONCEPT"] },
+                  description: { type: Type.STRING },
+                  pricePoint: { type: Type.STRING },
+                  strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  weaknesses: { type: Type.ARRAY, items: { type: Type.STRING } }
+                }
+              }
+            },
+            ourConcept: {
+               type: Type.OBJECT,
+               properties: {
+                  name: { type: Type.STRING },
+                  type: { type: Type.STRING, enum: ["EXISTING", "CONCEPT"] },
+                  description: { type: Type.STRING },
+                  pricePoint: { type: Type.STRING },
+                  strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  weaknesses: { type: Type.ARRAY, items: { type: Type.STRING } }
+               }
+            },
+            capitalStrategy: {
+              type: Type.OBJECT,
+              properties: {
+                estimatedEntryCost: { type: Type.STRING },
+                valueLeverage: { type: Type.STRING },
+                capitalRatio: { type: Type.STRING },
+                verdict: { type: Type.STRING }
+              }
+            }
+          }
+        }
+      }
     });
 
-    return {
-      text: response.text || "No results found.",
-      chunks: response.candidates?.[0]?.groundingMetadata?.groundingChunks || []
-    };
+    if (response.text) {
+      return JSON.parse(response.text) as MarketAnalysis;
+    }
+    return null;
   } catch (error) {
-    console.error("Scouting Error:", error);
-    return { text: "Error scouting region.", chunks: [] };
+    console.error("Market Analysis Error:", error);
+    return null;
   }
 };
 
@@ -246,16 +313,22 @@ export const sendEntityChatMessage = async (
 
   const systemInstruction = `
     You are the Director of Operations and Brand Strategy for '${entity.name}'.
-    Location: ${entity.location}.
-    Description: ${entity.description}.
     
-    Mission:
-    1. Help the user build this specific business ecosystem.
-    2. Prioritize regional sourcing from the Delta (Mississippi, Tennessee, Louisiana, Arkansas, Alabama).
+    CRITICAL KNOWLEDGE BASE:
+    You have access to the full "Discovery Model" spreadsheet structure:
+    1. Ecosystem Map (The Cards)
+    2. Layer Analysis (Foundation, Network, Machine, Business)
+    3. Gap Tracker (Current blockers)
+    4. Revenue Model (Target: 200 bookings/quarter @ $500 avg, 20% occupancy increase)
+    5. Entity Registry (All business units including Hotel, Venue, Packages, Residencies, Development)
+    
+    Your Mission:
+    1. Act as the specific notebook/brain for '${entity.name}' but understand its dependency on the wider network.
+    2. Prioritize regional sourcing from the Delta (MS, TN, LA, AR, AL).
     3. Retell the brand story to attract the right customers.
     4. Maintain the brand voice: sophisticated, authentic, rooted in heritage but modern.
     
-    Your answers should be strategic, actionable, and concise. You are a notebook for this specific entity.
+    Your answers should be strategic, actionable, and concise.
   `;
 
   try {
