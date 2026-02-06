@@ -40,7 +40,6 @@ import { ThemeId, ThemeConfig, BusinessEntity, BusinessGap, GapStatus, ChatMessa
 import { 
   generateGapSolutions, 
   generateEntityVisual, 
-  scoutRegionalBusinesses, 
   performMarketAnalysis,
   generateReel, 
   modifyRoomScenario,
