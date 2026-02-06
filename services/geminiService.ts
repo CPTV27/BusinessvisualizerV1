@@ -351,3 +351,103 @@ export const sendEntityChatMessage = async (
     return "I'm having trouble connecting to the network right now.";
   }
 };
+
+// ============================================
+// [CC] PANORAMIC ENVIRONMENT GENERATION
+// For Three.js skybox rendering in ImmersiveEntity
+// ============================================
+
+export const generatePanoramicEnvironment = async (
+  entity: BusinessEntity,
+  themeDescription: string,
+  mood: 'day' | 'evening' | 'night' = 'evening'
+): Promise<string | null> => {
+  const ai = getAI();
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) return null;
+
+  // Map entity types to visual environments
+  const environmentStyles: Record<string, string> = {
+    'VENUE': 'Interior architectural space, luxury boutique hotel, detailed furnishings, warm ambient lighting',
+    'EXPERIENCE': 'Atmospheric performance space, stage lighting, audience perspective, intimate music venue',
+    'BRAND': 'Abstract brand world, floating elements, logo-inspired geometry, clean infinite space',
+    'DEVELOPMENT': 'Construction site meets architectural rendering, blueprints come to life, scaffolding and vision',
+    'PACKAGE': 'Luxury gift arrangement, premium unboxing experience, velvet and gold',
+    'PROGRAM': 'Creative workshop space, instruments, art supplies, collaborative energy',
+  };
+
+  const moodLighting: Record<string, string> = {
+    'day': 'Bright natural light streaming through windows, warm afternoon sun, golden hour warmth',
+    'evening': 'Warm tungsten lighting, candles, amber glow, intimate atmosphere, blue hour outside windows',
+    'night': 'Moody low lighting, neon accents, spotlight drama, deep shadows, after-midnight energy',
+  };
+
+  const envStyle = environmentStyles[entity.type] || environmentStyles['VENUE'];
+  const lighting = moodLighting[mood];
+
+  const prompt = `
+    Create an EQUIRECTANGULAR PANORAMIC image (360-degree view, 2:1 aspect ratio) of:
+    "${entity.name}" — ${entity.description}
+    Location: ${entity.location || 'Mississippi Delta'}
+
+    Visual Style: ${envStyle}
+    Lighting: ${lighting}
+    Art Direction: ${themeDescription}
+
+    This is a panoramic environment map for a 3D skybox. The image must wrap seamlessly
+    at the left and right edges. Camera is at eye level in the center of the space.
+
+    Quality: Photorealistic, 8K detail, architectural photography, cinematic depth of field.
+    NO TEXT. NO WATERMARKS. NO UI ELEMENTS.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [{ text: prompt }]
+      },
+      config: {
+        imageConfig: {
+          aspectRatio: "16:9", // Closest to equirectangular 2:1
+        }
+      }
+    });
+
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData) {
+        return `data:image/png;base64,${part.inlineData.data}`;
+      }
+    }
+    return null;
+  } catch (error) {
+    console.error("Panoramic Gen Error:", error);
+    return null;
+  }
+};
+
+// Batch generate environments for all entities in a layer
+export const generateLayerEnvironments = async (
+  entities: BusinessEntity[],
+  themeDescription: string,
+  onProgress?: (entityId: string, imageUrl: string) => void
+): Promise<Map<string, string>> => {
+  const results = new Map<string, string>();
+
+  // Process sequentially to avoid rate limits
+  for (const entity of entities) {
+    try {
+      const imageUrl = await generatePanoramicEnvironment(entity, themeDescription);
+      if (imageUrl) {
+        results.set(entity.id, imageUrl);
+        onProgress?.(entity.id, imageUrl);
+      }
+      // Small delay between requests to respect rate limits
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } catch (error) {
+      console.error(`Failed to generate environment for ${entity.name}:`, error);
+    }
+  }
+
+  return results;
+};
