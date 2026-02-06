@@ -40,13 +40,12 @@ import { ThemeId, ThemeConfig, BusinessEntity, BusinessGap, GapStatus, ChatMessa
 import {
   generateGapSolutions,
   generateEntityVisual,
-  scoutRegionalBusinesses,
   performMarketAnalysis,
   generateReel,
   modifyRoomScenario,
   sendEntityChatMessage
 } from './services/geminiService';
-import { ImmersiveThemeSelector } from './src/components/ImmersiveThemeSelector';
+import { StudioExperience } from './src/components/StudioExperience';
 
 // Define AIStudio interface locally to avoid global declaration conflicts
 interface AIStudio {
@@ -635,8 +634,20 @@ export default function App() {
 
   if (!selectedThemeId || !currentTheme) {
     return (
-      <ImmersiveThemeSelector
-        onSelectTheme={(themeId) => setSelectedThemeId(themeId)}
+      <StudioExperience
+        entities={entities.map(e => ({
+          id: e.id,
+          name: e.name,
+          type: e.type,
+          layer: e.layer || 'FOUNDATION',
+          description: e.description,
+          kpiValue: e.kpiValue,
+          coordinates: e.coordinates || { x: 50, y: 50 },
+          gaps: e.gaps.map(g => ({ priority: g.priority, status: g.status })),
+        }))}
+        onEntitySelect={(entityId) => setSelectedEntityId(entityId)}
+        onThemeSelect={(themeId) => setSelectedThemeId(themeId)}
+        selectedThemeId={selectedThemeId}
       />
     );
   }

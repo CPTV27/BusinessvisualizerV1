@@ -121,3 +121,25 @@ export interface ScoutResult {
   rating?: string;
   uri?: string;
 }
+
+// --- IMMERSIVE 3D ENVIRONMENT TYPES (GA + CC) ---
+
+export type ParticleSystemType = 'fireflies' | 'dust' | 'rain' | 'neon' | 'none';
+export type MoodType = 'day' | 'evening' | 'night';
+
+export interface EnvironmentConfig {
+  skyboxUrl: string | null;
+  mood: MoodType;
+  ambientColor: string;
+  fogDensity: number;
+  particleSystem: ParticleSystemType;
+}
+
+export interface EntityMarker3D {
+  entityId: string;
+  position: [number, number, number]; // x, y, z in Three.js space
+  scale: number;
+  glowColor: string;
+  orbitRadius: number;
+  label?: string;
+}

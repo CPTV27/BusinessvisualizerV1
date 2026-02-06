@@ -1,5 +1,6 @@
 import { GoogleGenAI, GenerateContentResponse, VideoGenerationReferenceImage, VideoGenerationReferenceType, Type } from "@google/genai";
-import { BusinessEntity, BusinessGap, ChatMessage, ServiceLayer, MarketAnalysis } from "../types";
+import { BusinessEntity, BusinessGap, ChatMessage, ServiceLayer, MarketAnalysis, ThemeId, MoodType } from "../types";
+import { ENVIRONMENT_DESCRIPTIONS } from "../constants";
 
 // Helper to get fresh instance (important for Veo key switching)
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
@@ -353,53 +354,80 @@ export const sendEntityChatMessage = async (
 };
 
 // ============================================
-// [CC] PANORAMIC ENVIRONMENT GENERATION
-// For Three.js skybox rendering in ImmersiveEntity
+// [CC + GA] PANORAMIC ENVIRONMENT GENERATION
+// For Three.js skybox rendering in ImmersiveWorld
+// Uses ENVIRONMENT_DESCRIPTIONS from constants.ts
 // ============================================
 
+/**
+ * Generate an equirectangular panoramic image for a Three.js skybox.
+ * Uses ENVIRONMENT_DESCRIPTIONS for rich, theme-aware prompts.
+ *
+ * Primary: Gemini 2.5 Flash Image (high-quality equirectangular)
+ * Fallback: Returns null → UI shows gradient from FALLBACK_GRADIENTS
+ */
 export const generatePanoramicEnvironment = async (
   entity: BusinessEntity,
   themeDescription: string,
-  mood: 'day' | 'evening' | 'night' = 'evening'
+  mood: MoodType = 'evening',
+  themeId?: ThemeId
 ): Promise<string | null> => {
   const ai = getAI();
   const apiKey = process.env.API_KEY;
   if (!apiKey) return null;
 
-  // Map entity types to visual environments
-  const environmentStyles: Record<string, string> = {
-    'VENUE': 'Interior architectural space, luxury boutique hotel, detailed furnishings, warm ambient lighting',
-    'EXPERIENCE': 'Atmospheric performance space, stage lighting, audience perspective, intimate music venue',
-    'BRAND': 'Abstract brand world, floating elements, logo-inspired geometry, clean infinite space',
-    'DEVELOPMENT': 'Construction site meets architectural rendering, blueprints come to life, scaffolding and vision',
-    'PACKAGE': 'Luxury gift arrangement, premium unboxing experience, velvet and gold',
-    'PROGRAM': 'Creative workshop space, instruments, art supplies, collaborative energy',
-  };
+  // Use rich descriptions from ENVIRONMENT_DESCRIPTIONS if themeId provided
+  let envBackdrop = '';
+  let moodLighting = '';
+  let baseDescription = themeDescription;
+  let negativePrompt = 'text, watermark, frames, borders, distortion at poles, cartoon, anime, low quality, blurry';
 
-  const moodLighting: Record<string, string> = {
-    'day': 'Bright natural light streaming through windows, warm afternoon sun, golden hour warmth',
-    'evening': 'Warm tungsten lighting, candles, amber glow, intimate atmosphere, blue hour outside windows',
-    'night': 'Moody low lighting, neon accents, spotlight drama, deep shadows, after-midnight energy',
-  };
+  if (themeId && ENVIRONMENT_DESCRIPTIONS[themeId]) {
+    const envDesc = ENVIRONMENT_DESCRIPTIONS[themeId];
+    baseDescription = envDesc.base;
+    envBackdrop = envDesc.entityBackdrops[entity.type] || envDesc.entityBackdrops['VENUE'] || '';
+    moodLighting = envDesc.moods[mood] || envDesc.moods.evening;
+    negativePrompt = envDesc.negativePrompt;
+  } else {
+    // Fallback to inline descriptions if no themeId
+    const fallbackStyles: Record<string, string> = {
+      'VENUE': 'Interior architectural space, luxury boutique hotel, detailed furnishings, warm ambient lighting',
+      'EXPERIENCE': 'Atmospheric performance space, stage lighting, audience perspective, intimate music venue',
+      'BRAND': 'Abstract brand world, floating elements, logo-inspired geometry, clean infinite space',
+      'DEVELOPMENT': 'Construction site meets architectural rendering, blueprints come to life',
+      'PACKAGE': 'Luxury gift arrangement, premium unboxing experience, velvet and gold',
+      'PROGRAM': 'Creative workshop space, instruments, art supplies, collaborative energy',
+      'ROOM_CATEGORY': 'Luxury hotel room interior, premium bedding, atmospheric lighting',
+    };
+    const fallbackMoods: Record<string, string> = {
+      'day': 'Bright natural light streaming through windows, warm afternoon sun, golden hour warmth',
+      'evening': 'Warm tungsten lighting, candles, amber glow, intimate atmosphere, blue hour outside windows',
+      'night': 'Moody low lighting, neon accents, spotlight drama, deep shadows, after-midnight energy',
+    };
+    envBackdrop = fallbackStyles[entity.type] || fallbackStyles['VENUE'];
+    moodLighting = fallbackMoods[mood];
+  }
 
-  const envStyle = environmentStyles[entity.type] || environmentStyles['VENUE'];
-  const lighting = moodLighting[mood];
+  const prompt = `360 degree equirectangular projection, seamless panoramic HDRI environment map, 8k resolution.
 
-  const prompt = `
-    Create an EQUIRECTANGULAR PANORAMIC image (360-degree view, 2:1 aspect ratio) of:
-    "${entity.name}" — ${entity.description}
-    Location: ${entity.location || 'Mississippi Delta'}
+Scene: "${entity.name}" — ${entity.description}
+Location: ${entity.location || 'Mississippi Delta'}
 
-    Visual Style: ${envStyle}
-    Lighting: ${lighting}
-    Art Direction: ${themeDescription}
+Art Direction: ${baseDescription}
 
-    This is a panoramic environment map for a 3D skybox. The image must wrap seamlessly
-    at the left and right edges. Camera is at eye level in the center of the space.
+Entity Environment: ${envBackdrop}
 
-    Quality: Photorealistic, 8K detail, architectural photography, cinematic depth of field.
-    NO TEXT. NO WATERMARKS. NO UI ELEMENTS.
-  `;
+Lighting & Mood: ${moodLighting}
+
+Technical Requirements:
+- This is an equirectangular panoramic image for a Three.js skybox sphere
+- The image MUST wrap seamlessly at left and right edges (360 degree continuous)
+- Camera is at eye level, centered in the space
+- Photorealistic architectural photography quality
+- Cinematic depth of field, volumetric lighting
+- Rich detail in all directions (left, right, up, down, forward, behind)
+
+DO NOT include: ${negativePrompt}`;
 
   try {
     const response = await ai.models.generateContent({
@@ -409,7 +437,7 @@ export const generatePanoramicEnvironment = async (
       },
       config: {
         imageConfig: {
-          aspectRatio: "16:9", // Closest to equirectangular 2:1
+          aspectRatio: "16:9", // Closest available to equirectangular 2:1
         }
       }
     });
@@ -419,31 +447,37 @@ export const generatePanoramicEnvironment = async (
         return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
+    // Fallback: return null — UI shows gradient
     return null;
   } catch (error) {
     console.error("Panoramic Gen Error:", error);
+    // Always return null on failure — UI handles gradient fallback
     return null;
   }
 };
 
-// Batch generate environments for all entities in a layer
+/**
+ * Batch generate environments for all entities in a layer.
+ * Processes sequentially with rate limiting to avoid API throttling.
+ */
 export const generateLayerEnvironments = async (
   entities: BusinessEntity[],
   themeDescription: string,
+  themeId?: ThemeId,
+  mood: MoodType = 'evening',
   onProgress?: (entityId: string, imageUrl: string) => void
 ): Promise<Map<string, string>> => {
   const results = new Map<string, string>();
 
-  // Process sequentially to avoid rate limits
   for (const entity of entities) {
     try {
-      const imageUrl = await generatePanoramicEnvironment(entity, themeDescription);
+      const imageUrl = await generatePanoramicEnvironment(entity, themeDescription, mood, themeId);
       if (imageUrl) {
         results.set(entity.id, imageUrl);
         onProgress?.(entity.id, imageUrl);
       }
-      // Small delay between requests to respect rate limits
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Rate limit: 1.5s between requests
+      await new Promise(resolve => setTimeout(resolve, 1500));
     } catch (error) {
       console.error(`Failed to generate environment for ${entity.name}:`, error);
     }
